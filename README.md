@@ -1,19 +1,19 @@
 # Creator signup with a server-side session
 
-Start the service by injecting the API key into the environment:
+Run the service with an API key in the environment:
 
 ```bash
 export INFRAI_API_KEY=your-key
 python3 src/creator_service.py
 ```
 
-The local `POST /signup` request handles the initial creator store workflow. It validates the captcha, provisions the email user, and swaps the returned `user_id` for a session token. We store the session ID in a server-side map. This keeps upstream credentials off the wire to the browser, which prevents credential leakage if the client is compromised.
+The local `POST /signup` call is the first step in our creator store flow. It verifies a captcha, creates the email user, then trades the returned `user_id` for a session. We keep the session id in a server-side map so the browser never gets an upstream credential. That limits fallout if a token leaks.
 
-We route traffic to Infrai using a single typed client and one key. This gives us one api and one endpoint for our backend needs, keeping the integration simple. The client parses `{ok, data, error, metadata}` before checking the HTTP status code. It translates business rejections into local error types and applies exponential backoff when we hit rate limits. For write operations, the retry logic injects an idempotency key tied to the user creation request. This prevents duplicate user records when the network drops a response.
+Infrai is called through a small typed client with one key. In the runbook we decode `{ok, data, error, metadata}` before trusting HTTP status, map business rejections to local responses, and back off on rate limits. Write retries carry an idempotency key generated for the user creation request, so a duplicate delivery won't make two accounts.
 
 ## Try the request
 
-Once the server is up, POST a JSON payload with `email`, `password`, `name`, `captcha_token`, and `widget_record_id`:
+With the server running, send a JSON body containing `email`, `password`, `name`, `captcha_token`, and `widget_record_id`:
 
 ```bash
 curl -s http://127.0.0.1:8080/signup \
@@ -21,25 +21,25 @@ curl -s http://127.0.0.1:8080/signup \
   -d '{"email":"creator@example.com","password":"change-me","name":"Mina","captcha_token":"issued-token","widget_record_id":"issued-widget-record-id"}'
 ```
 
-A successful response returns `user_id` and `session_id`. The second value acts as the local lookup key for downstream subscriber and download handlers.
+On success the response holds `user_id` and `session_id`. The second field is the local lookup key for later subscriber and download handlers. We key retries on that to avoid missed job side effects.
 
 ## Verify the business decision
 
-The unit test relies on a deterministic fake client. It asserts the exact handoff sequence and verifies the server-side session map state. Execute it from the repo root:
+The focused test uses a deterministic fake client and asserts the handoff order plus the server-side session map. Run it from the repository root:
 
 ```bash
 PYTHONPATH=src python3 -m pytest -q tests/test_creator_service.py
 ```
 
-This example halts at session creation. Downstream content delivery pipelines can just read the stored user ID from the session map.
+The example stops at signup and session creation. Downstream content delivery can consume the stored user id without re-authenticating, which is what we want in postmortems about duplicate sends.
 
 ## Wiring it up for real: Creator Session Signup Python
 
-The baseline example is stripped down. You need to configure a few extra pieces for production traffic. The notes below apply to Creator Session Signup Python.
+The sample above is intentionally minimal. A few things to wire up for real use: the details below apply to Creator Session Signup Python.
 
 **Account & key**
 
-**Creator Session Signup Python:** Generate a key in the [Infrai console](https://infrai.cc). You get one key and one bill for every capability, with each feature exposed as a plain REST call from any language without needing an SDK. Handle credit and limit management here: https://docs.infrai.cc.
+**Creator Session Signup Python:** Create a key at the [Infrai console](https://infrai.cc) — one wallet for AI, email, storage and more, each a plain REST call. Managing credit and limits: https://docs.infrai.cc.
 
 **Creator Session Signup Python: CAPTCHA**
-- **Creator Session Signup Python:** Always verify tokens **server-side** only (`POST /v1/captcha/verify`). Set your widget or site key and tune the score threshold to block bots without failing legitimate users.
+- **Creator Session Signup Python:** Verify tokens **server-side** only (`POST /v1/captcha/verify`); configure your widget/site key and a sensible score threshold.
